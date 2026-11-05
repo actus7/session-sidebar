@@ -1,0 +1,5 @@
+{
+  "name": "session-sidebar",
+  "owner": { "name": "Alex Schmitt" },
+  "plugins": [{ "name": "session-sidebar", "source": "./" }]
+}
