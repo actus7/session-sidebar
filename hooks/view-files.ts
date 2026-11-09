@@ -61,7 +61,7 @@ function totals(files: ChangedFile[], width: number): Line {
 export function fileRows(git: ChangedFile[] | null, sessionFiles: FileChange[], width: number, isMore = false): Line[] {
   const maxRows = cap(MAX_BODY_ROWS, isMore)
   const isFallback = git === null
-  const files: ChangedFile[] = git ?? sessionFiles.map(file => ({ code: FALLBACK_CODE, ...file, removed: file.removed }))
+  const files: ChangedFile[] = git ?? sessionFiles.map(file => ({ code: FALLBACK_CODE, ...file }))
   const label = isFallback ? [dimLine('sessão (sem git): só Edit/Write', width)] : []
   if (files.length === 0) return [...label, dimLine('nenhuma alteração', width)]
 

@@ -3,17 +3,18 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { readAgents, fileReaderOf, readScopedDefinitions } from './agents'
 import { applyCheck, classifyCommand } from './checks'
-import { readChangedFiles } from './git'
+import { readBranch, readChangedFiles } from './git'
 import { buildCards } from './layout'
 import { readExtensions, readPluginAgents } from './plugins'
 import { renderPane } from './pane'
-import { readBreakdown, readStatus, toUsage } from './status'
+import { readBreakdown, readModel, readUsage, toUsage } from './status'
 import { statusPills } from './view-statusbar'
 import { addChange, readBefore } from './track'
 import { countLines } from './text'
 import { asUsageLog, recordUse, useOfPrompt, useOfToolCall, USAGE_KEY, type Use } from './usage'
 
 const PANE = 'session-sidebar'
+const PANE_TITLE = 'Sessão'
 const CLOCK_MS = 60_000
 
 const cwd = atom({ plugin: 'session-sidebar', key: 'cwd' } as const, '')
@@ -43,16 +44,16 @@ const flip = (list: string[], id: string) => (list.includes(id) ? list.filter(it
 // The clock redraws the pane each minute so the reset countdowns stay current.
 let clockTimer: { cancel: () => void } | undefined
 
-async function refreshStatus($: EngineInterface): Promise<void> {
-  const status = await readStatus($)
-  const nextUsage = status.usage
-  const nextLimits = status.limits
-  const nextBranch = status.branch
-  const nextModel = status.model
-  if (nextUsage !== undefined) await update($, usage, () => nextUsage)
-  if (nextLimits !== undefined) await update($, limits, () => nextLimits)
-  if (nextBranch !== undefined) await update($, branch, () => nextBranch)
-  if (nextModel !== undefined) await update($, model, () => nextModel)
+async function refreshUsage($: EngineInterface): Promise<void> {
+  const next = await readUsage($)
+  if (next === undefined) return
+  await update($, usage, () => next.usage)
+  await update($, limits, () => next.limits)
+}
+
+async function refreshModel($: EngineInterface): Promise<void> {
+  const next = await readModel($)
+  if (next !== undefined) await update($, model, () => next)
 }
 
 // Once per turn: the breakdown is the costlier read.
@@ -66,7 +67,8 @@ async function refreshAgents($: EngineInterface): Promise<void> {
   if (rows !== undefined) await update($, agents, () => rows)
 }
 
-async function refreshDefs($: EngineInterface, folder: string): Promise<void> {
+async function refreshDefs($: EngineInterface): Promise<void> {
+  const folder = await read($, cwd)
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
   const reader = fileReaderOf($)
   const scoped = await readScopedDefinitions(reader, home, folder)
@@ -130,15 +132,16 @@ async function knownSkill($: EngineInterface): Promise<(name: string) => boolean
   return name => user.has(name) || plugins.has(name.split(':')[0] ?? '')
 }
 
-// Git is the source of truth for changed files. A burst of tool calls folds
-// into at most two runs: one in flight, and one more if asked meanwhile. A
-// failed run keeps the last list on screen.
+// Git is the source of truth for changed files and for the branch. A burst of
+// tool calls folds into at most two runs: one in flight, and one more if asked
+// meanwhile. A failed run keeps the last values on screen and never rejects.
 let gitRunning: Promise<void> | null = null
 let isGitAgain = false
 
 async function runGitRefresh($: EngineInterface): Promise<void> {
-  const files = await readChangedFiles($)
+  const [files, nextBranch] = await Promise.all([readChangedFiles($), readBranch($)])
   if (files !== undefined) await update($, git, () => files)
+  if (nextBranch !== undefined) await update($, branch, () => nextBranch)
 }
 
 async function drainGitRefresh($: EngineInterface): Promise<void> {
@@ -147,6 +150,8 @@ async function drainGitRefresh($: EngineInterface): Promise<void> {
       isGitAgain = false
       await runGitRefresh($)
     }
+  } catch (error) {
+    $.ui.log(`session-sidebar: git refresh failed: ${String(error)}`)
   } finally {
     gitRunning = null
   }
@@ -158,6 +163,23 @@ function refreshGitFiles($: EngineInterface): Promise<void> {
   return gitRunning
 }
 
+// What a turn, a model switch or a compaction can move. The reads are
+// independent, so they run together.
+async function refreshSession($: EngineInterface): Promise<void> {
+  await Promise.all([refreshUsage($), refreshModel($), refreshBreakdown($), refreshAgents($), refreshGitFiles($)])
+}
+
+// What the user's settings and the plugin folders define.
+async function refreshConfigured($: EngineInterface): Promise<void> {
+  await Promise.all([refreshDefs($), refreshExtensions($)])
+}
+
+// Outside git the files card lists the session's own Edit/Write; inside it git
+// answers, and the tally (a whole-file read before each Write) is skipped.
+async function isTallyNeeded($: EngineInterface): Promise<boolean> {
+  return (await read($, git)) === null
+}
+
 function succeeded(ran: { deny?: unknown; isError?: boolean }): boolean {
   return ran.deny === undefined && ran.isError !== true
 }
@@ -166,20 +188,14 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'sidebar',
-      description: 'Show or hide the session sidebar',
+      description: 'Mostra ou oculta a sidebar da sessão',
     })
     await update($, cwd, () => e.cwd)
     await update($, isRunning, () => false)
-    await refreshStatus($)
-    await refreshBreakdown($)
-    await refreshAgents($)
-    await refreshDefs($, e.cwd)
-    await refreshVersion($)
-    await refreshExtensions($)
-    await refreshGitFiles($)
+    await Promise.all([refreshSession($), refreshConfigured($), refreshVersion($)])
     clockTimer?.cancel()
     clockTimer = $.clock.every(CLOCK_MS, () => $.ui.invalidate('ui.render'))
-    if (await read($, isOpen)) void $.ui.open({ id: PANE, title: 'Session' })
+    if (await read($, isOpen)) void $.ui.open({ id: PANE, title: PANE_TITLE })
 
     return next(e)
   })
@@ -190,7 +206,40 @@ export const register: Register = on => {
     await update($, usage, () => toUsage(e.context, e.cost))
 
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
+
+  // /model, the picker, fast mode or a fallback: the header names the new model
+  // at once, then the window and the breakdown it brings are measured again.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    await update($, model, () => e.to_model)
+    const ran = await next(e)
+    await Promise.all([refreshUsage($), refreshBreakdown($)])
+
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  on('classic.PostCompact', async ($, e, next) => {
+    const ran = await next(e)
+    await Promise.all([refreshUsage($), refreshBreakdown($)])
+
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  on('classic.CwdChanged', async ($, e, next) => {
+    await update($, cwd, () => e.new_cwd)
+    const ran = await next(e)
+    await Promise.all([refreshGitFiles($), refreshDefs($)])
+
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // Settings or skills changed on disk: a plugin enabled, a skill added.
+  on('classic.ConfigChange', async ($, e, next) => {
+    const ran = await next(e)
+    await refreshConfigured($)
+
+    return ran
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'sidebar' }, async $ => {
     const isNowOpen = !(await read($, isOpen))
@@ -198,11 +247,11 @@ export const register: Register = on => {
 
     if (!isNowOpen) {
       await $.ui.close({ id: PANE })
-      return { text: 'Sidebar hidden.' }
+      return { text: 'Sidebar oculta.' }
     }
-    await $.ui.open({ id: PANE, title: 'Session' })
+    await $.ui.open({ id: PANE, title: PANE_TITLE })
 
-    return { text: 'Sidebar shown.' }
+    return { text: 'Sidebar visível.' }
   })
 
   // The person closed the sidebar with its own mark: keep `isOpen` true to what is drawn, so the
@@ -214,24 +263,33 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
-    await update($, isRunning, () => true)
-    // What the status bar's "(+…)" growth is counted from.
-    const now = await read($, usage)
-    await update($, turnBase, () => (now === null ? null : { tokens: now.tokens, usd: now.usd }))
     await recordUsage($, useOfPrompt(e.text, await knownSkill($)))
 
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  on('turn.complete', async ($, e, next) => {
-    await update($, isRunning, () => false)
-    await refreshStatus($)
-    await refreshBreakdown($)
-    await refreshAgents($)
-    await refreshGitFiles($)
+  // Only the main loop's turn makes the session ativo; a subagent's is its own.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    await update($, isRunning, () => true)
+    // What the status bar's "(+…)" growth is counted from.
+    const now = await read($, usage)
+    await update($, turnBase, () => (now === null ? null : { tokens: now.tokens, usd: now.usd }))
+    await refreshModel($)
 
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      await refreshAgents($)
+      return next(e)
+    }
+    await update($, isRunning, () => false)
+    await refreshSession($)
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
     const ran = await next(e)
@@ -263,7 +321,7 @@ export const register: Register = on => {
   // The observers below only watch: a failure passes the call on unchanged.
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
     const ran = await next(e)
-    if (succeeded(ran)) {
+    if (succeeded(ran) && (await isTallyNeeded($))) {
       const change = {
         path: e.file_path,
         added: countLines(e.new_string),
@@ -277,9 +335,10 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    const before = await readBefore($, e.file_path)
+    const isTallied = await isTallyNeeded($)
+    const before = isTallied ? await readBefore($, e.file_path) : ''
     const ran = await next(e)
-    if (succeeded(ran)) {
+    if (isTallied && succeeded(ran)) {
       const change = {
         path: e.file_path,
         added: countLines(e.content),
@@ -377,7 +436,7 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const expand = async () => {
       await update($, isOpen, () => true)
-      await $.ui.open({ id: PANE, title: 'Session' })
+      await $.ui.open({ id: PANE, title: PANE_TITLE })
     }
     // The figures the sidebar showed, as pills on the left; the button stays on the right.
     const pills = statusPills(await read($, usage), (await read($, limits)) ?? [], await read($, turnBase))

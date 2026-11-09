@@ -3,8 +3,8 @@ import type { EngineInterface } from 'claude-code'
 import type { ChangedFile } from '../types'
 import { countLines } from './text'
 
-export const GIT_TIMEOUT_MS = 5000
-export const UNTRACKED_READ_LIMIT = 200
+const GIT_TIMEOUT_MS = 5000
+const UNTRACKED_READ_LIMIT = 200
 
 type Entry = { code: string; path: string }
 type Counts = { added: number | null; removed: number | null }
@@ -110,12 +110,11 @@ async function countUntracked($: EngineInterface, paths: string[]): Promise<Map<
 // undefined when git could not run at all, so the caller keeps what it had.
 export async function readChangedFiles($: EngineInterface): Promise<ChangedFile[] | null | undefined> {
   try {
-    const status = await $.process.run(
-      ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
-      { timeoutMs: GIT_TIMEOUT_MS },
-    )
+    const [status, diff] = await Promise.all([
+      $.process.run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { timeoutMs: GIT_TIMEOUT_MS }),
+      $.process.run(['git', 'diff', '--numstat', '-z', 'HEAD'], { timeoutMs: GIT_TIMEOUT_MS }),
+    ])
     if (status.exitCode !== 0) return null
-    const diff = await $.process.run(['git', 'diff', '--numstat', '-z', 'HEAD'], { timeoutMs: GIT_TIMEOUT_MS })
     const counts = diff.exitCode === 0 ? parseNumstatZ(diff.stdout) : new Map<string, Counts>()
     const entries = parsePorcelainZ(status.stdout)
     const untracked = await countUntracked(
@@ -125,6 +124,18 @@ export async function readChangedFiles($: EngineInterface): Promise<ChangedFile[
     return sortByDirectory(mergeChanged(entries, counts, untracked))
   } catch (error) {
     $.ui.log(`session-sidebar: git status unavailable: ${String(error)}`)
+    return undefined
+  }
+}
+
+// The checked-out branch. Null outside a git repository; undefined when git
+// could not run, so the caller keeps what it had.
+export async function readBranch($: EngineInterface): Promise<string | null | undefined> {
+  try {
+    const result = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: GIT_TIMEOUT_MS })
+    return result.exitCode === 0 ? result.stdout.trim() : null
+  } catch (error) {
+    $.ui.log(`session-sidebar: git branch unavailable: ${String(error)}`)
     return undefined
   }
 }

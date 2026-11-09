@@ -1,7 +1,6 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { Breakdown, Limit, Usage } from '../types'
-import { GIT_TIMEOUT_MS } from './git'
 import { groupMcps } from './view-mcps'
 
 // The category breakdown is the costly read (a summary estimate), so it runs
@@ -28,15 +27,8 @@ export async function readBreakdown($: EngineInterface): Promise<Breakdown | nul
   }
 }
 
-export type StatusRead = {
-  usage?: Usage | null
-  limits?: Limit[]
-  branch?: string | null
-  model?: string | null
-}
-
-// Each figure is set only when its read worked, so a failed read keeps the
-// last good value on screen. A missing figure is a log line, never a crash.
+// Each read answers undefined when it failed, so the caller keeps the last
+// good value on screen. A missing figure is a log line, never a crash.
 export function toUsage(
   context: { tokens?: number; window: number; percent?: number },
   cost?: { usd: number },
@@ -49,7 +41,7 @@ export function toUsage(
   }
 }
 
-async function readUsage($: EngineInterface): Promise<Pick<StatusRead, 'usage' | 'limits'> | undefined> {
+export async function readUsage($: EngineInterface): Promise<{ usage: Usage; limits: Limit[] } | undefined> {
   try {
     const { context, cost, rateLimits } = await $.session.usage()
     return { usage: toUsage(context, cost), limits: rateLimits }
@@ -59,28 +51,11 @@ async function readUsage($: EngineInterface): Promise<Pick<StatusRead, 'usage' |
   }
 }
 
-async function readBranch($: EngineInterface): Promise<string | null | undefined> {
-  try {
-    const result = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: GIT_TIMEOUT_MS })
-    return result.exitCode === 0 ? result.stdout.trim() : null
-  } catch (error) {
-    $.ui.log(`session-sidebar: git branch unavailable: ${String(error)}`)
-    return undefined
-  }
-}
-
-async function readModel($: EngineInterface): Promise<string | undefined> {
+export async function readModel($: EngineInterface): Promise<string | undefined> {
   try {
     return await $.session.model()
   } catch (error) {
     $.ui.log(`session-sidebar: model unavailable: ${String(error)}`)
     return undefined
   }
-}
-
-export async function readStatus($: EngineInterface): Promise<StatusRead> {
-  const usage = await readUsage($)
-  const branch = await readBranch($)
-  const model = await readModel($)
-  return { ...usage, branch, model }
 }

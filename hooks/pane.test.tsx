@@ -123,6 +123,7 @@ const SEEDED: PaneData = {
 // Nothing sits beneath the plugin: each hook here stands for the engine.
 function engine(on: On, git: { status: string; numstat: string }) {
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  on('ui.log', () => ({ value: undefined }))
   on('clock.now', () => ({ value: NOW }))
   on('clock.every', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'sidebar' } }))
@@ -283,4 +284,41 @@ test('with no rate limits, no breakdown and no git, each card says so on one lin
   expect(rendered.some(row => row.includes('detalhe após o próximo turno'))).toBe(true)
   expect(rendered.some(row => row.includes('nenhuma verificação nesta sessão'))).toBe(true)
   expect(rendered.some(row => row.includes('sessão (sem git): só Edit/Write'))).toBe(true)
+})
+
+test('switching the model redraws the header at once, without waiting for a turn', async ($, on) => {
+  engine(on, { status: '', numstat: '' })
+  on('classic.PostModelSwitch', () => ({}))
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /● opus-4-7/ })).toBeDefined()
+
+  await $.classic.PostModelSwitch({
+    from_model: 'claude-opus-4-7',
+    to_model: 'claude-fable-5-2',
+    requested_model: 'fable',
+    source: 'command',
+    context_tokens: 0,
+  } as never)
+
+  expect(await ui.find({ type: 'Text', text: /● fable-5-2/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /● opus-4-7/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the main turn drives ativo/ocioso; a subagent ending its turn leaves the session ativo', async ($, on) => {
+  engine(on, { status: '', numstat: '' })
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /^ocioso$/ })).toBeDefined()
+
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  expect(await ui.find({ type: 'Text', text: /^ativo$/ })).toBeDefined()
+  await $.turn.complete({ turnId: 's1', agentId: 'a1', reason: 'completed' } as never)
+  expect(await ui.find({ type: 'Text', text: /^ativo$/ })).toBeDefined()
+  await $.turn.complete({ turnId: 't1', reason: 'completed' } as never)
+  expect(await ui.find({ type: 'Text', text: /^ocioso$/ })).toBeDefined()
+  await ui.unmount()
 })

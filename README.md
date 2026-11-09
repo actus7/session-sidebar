@@ -24,6 +24,8 @@ and changed files. Collapse it and a one-line status bar takes its place above t
 - **▶ Recolher** hides the sidebar. A status bar with `contexto`, `custo` and `limite` pills (with the
   growth since your last prompt) and a **◀ Sidebar** button appears above the prompt.
 - `/sidebar` toggles it from the prompt.
+- Everything is live: a `/model` switch, a compaction, a `cd`, a branch change or a settings change
+  redraws the sidebar at once, without waiting for the next turn.
 
 ## Install
 

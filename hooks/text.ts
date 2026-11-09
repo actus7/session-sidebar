@@ -20,7 +20,6 @@ export const NO_VALUE = '—'
 const THOUSAND = 1000
 const BAR_FILLED = '█'
 const BAR_EMPTY = '░'
-const RULE = '─'
 const MIN_MIDDLE_WIDTH = 1
 
 export function charCount(text: string): number {
@@ -74,10 +73,6 @@ export function formatTokens(tokens: number): string {
   return tokens >= THOUSAND ? `${Number((tokens / THOUSAND).toFixed(1))}k` : String(tokens)
 }
 
-export function formatUsd(usd: number): string {
-  return `$${usd.toFixed(2)}`
-}
-
 export function shortModel(name: string): string {
   return name.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 }
@@ -89,10 +84,6 @@ export function baseName(path: string): string {
 export function countLines(text: string): number {
   if (text.length === 0) return 0
   return text.replace(/\r?\n$/, '').split(/\r?\n/).length
-}
-
-export function rule(title: string, width: number): string {
-  return `${title} ${RULE.repeat(Math.max(0, width - charCount(title) - 1))}`
 }
 
 export function dimLine(text: string, width: number): Line {
