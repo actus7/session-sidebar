@@ -16,6 +16,9 @@ import { asUsageLog, recordUse, useOfPrompt, useOfToolCall, USAGE_KEY, type Use 
 const PANE = 'session-sidebar'
 const PANE_TITLE = 'Sessão'
 const CLOCK_MS = 60_000
+// Another plugin may swallow the classic model-switch event, so the model is
+// also polled; the read is local and only a change writes.
+const MODEL_POLL_MS = 5_000
 
 const cwd = atom({ plugin: 'session-sidebar', key: 'cwd' } as const, '')
 const model = atom({ plugin: 'session-sidebar', key: 'model' } as const, null)
@@ -43,6 +46,7 @@ const flip = (list: string[], id: string) => (list.includes(id) ? list.filter(it
 
 // The clock redraws the pane each minute so the reset countdowns stay current.
 let clockTimer: { cancel: () => void } | undefined
+let modelTimer: { cancel: () => void } | undefined
 
 async function refreshUsage($: EngineInterface): Promise<void> {
   const next = await readUsage($)
@@ -53,7 +57,16 @@ async function refreshUsage($: EngineInterface): Promise<void> {
 
 async function refreshModel($: EngineInterface): Promise<void> {
   const next = await readModel($)
-  if (next !== undefined) await update($, model, () => next)
+  if (next !== undefined && next !== (await read($, model))) await update($, model, () => next)
+}
+
+async function refreshCwd($: EngineInterface): Promise<void> {
+  try {
+    const next = await $.session.cwd()
+    if (next !== (await read($, cwd))) await update($, cwd, () => next)
+  } catch (error) {
+    $.ui.log(`session-sidebar: cwd unavailable: ${String(error)}`)
+  }
 }
 
 // Once per turn: the breakdown is the costlier read.
@@ -166,6 +179,7 @@ function refreshGitFiles($: EngineInterface): Promise<void> {
 // What a turn, a model switch or a compaction can move. The reads are
 // independent, so they run together.
 async function refreshSession($: EngineInterface): Promise<void> {
+  await refreshCwd($)
   await Promise.all([refreshUsage($), refreshModel($), refreshBreakdown($), refreshAgents($), refreshGitFiles($)])
 }
 
@@ -195,6 +209,8 @@ export const register: Register = on => {
     await Promise.all([refreshSession($), refreshConfigured($), refreshVersion($)])
     clockTimer?.cancel()
     clockTimer = $.clock.every(CLOCK_MS, () => $.ui.invalidate('ui.render'))
+    modelTimer?.cancel()
+    modelTimer = $.clock.every(MODEL_POLL_MS, () => void refreshModel($))
     if (await read($, isOpen)) void $.ui.open({ id: PANE, title: PANE_TITLE })
 
     return next(e)
@@ -286,7 +302,9 @@ export const register: Register = on => {
       return next(e)
     }
     await update($, isRunning, () => false)
-    await refreshSession($)
+    // The classic compact, cwd and settings events can be swallowed by another
+    // plugin, so each main turn re-reads what they would have moved.
+    await Promise.all([refreshSession($), refreshConfigured($)])
 
     return next(e)
   }).catch(($, e, next) => next(e))

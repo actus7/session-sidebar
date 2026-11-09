@@ -121,7 +121,7 @@ const SEEDED: PaneData = {
 }
 
 // Nothing sits beneath the plugin: each hook here stands for the engine.
-function engine(on: On, git: { status: string; numstat: string }) {
+function engine(on: On, git: { status: string; numstat: string }, model: () => string = () => 'claude-opus-4-7') {
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   on('ui.log', () => ({ value: undefined }))
   on('clock.now', () => ({ value: NOW }))
@@ -137,7 +137,8 @@ function engine(on: On, git: { status: string; numstat: string }) {
       cost: { usd: 0.83 },
     },
   }))
-  on('session.model', () => ({ value: 'claude-opus-4-7' }))
+  on('session.model', () => ({ value: model() }))
+  on('session.cwd', () => ({ value: '/w/app' }))
   on('process.run', (_, e) => {
     if (e.argv[1] === 'status') return { value: ok(git.status) }
     if (e.argv[1] === 'diff') return { value: ok(git.numstat) }
@@ -287,12 +288,15 @@ test('with no rate limits, no breakdown and no git, each card says so on one lin
 })
 
 test('switching the model redraws the header at once, without waiting for a turn', async ($, on) => {
-  engine(on, { status: '', numstat: '' })
+  // As in the engine: once switched, the session reports the new model too.
+  let current = 'claude-opus-4-7'
+  engine(on, { status: '', numstat: '' }, () => current)
   on('classic.PostModelSwitch', () => ({}))
   await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: /● opus-4-7/ })).toBeDefined()
 
+  current = 'claude-fable-5-2'
   await $.classic.PostModelSwitch({
     from_model: 'claude-opus-4-7',
     to_model: 'claude-fable-5-2',
@@ -320,5 +324,19 @@ test('the main turn drives ativo/ocioso; a subagent ending its turn leaves the s
   expect(await ui.find({ type: 'Text', text: /^ativo$/ })).toBeDefined()
   await $.turn.complete({ turnId: 't1', reason: 'completed' } as never)
   expect(await ui.find({ type: 'Text', text: /^ocioso$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('with the model-switch event swallowed, the next main turn still shows the new model', async ($, on) => {
+  let current = 'claude-opus-4-7'
+  engine(on, { status: '', numstat: '' }, () => current)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /● opus-4-7/ })).toBeDefined()
+
+  current = 'claude-opus-5-5'
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  expect(await ui.find({ type: 'Text', text: /● opus-5-5/ })).toBeDefined()
   await ui.unmount()
 })
