@@ -58,6 +58,7 @@ const BREAKDOWN = {
 const SEEDED: PaneData = {
   cwd: 'C:\\projects\\my-app',
   model: 'claude-opus-4-7',
+  effort: 'high',
   branch: 'feat/sidebar',
   isRunning: true,
   usage: { tokens: 42100, window: 200000, percent: 21, usd: 0.83 },
@@ -338,5 +339,35 @@ test('with the model-switch event swallowed, the next main turn still shows the 
   current = 'claude-opus-5-5'
   await $.turn.start({ text: 'go', turnId: 't1' })
   expect(await ui.find({ type: 'Text', text: /● opus-5-5/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the header shows the reasoning level beside the model, and drops it when unknown', () => {
+  const header = (data: PaneData) => cardsToPlain(buildCards(data), WIDTH)[2] ?? ''
+  expect(header(SEEDED)).toMatch(/^│ ● opus-4-7 · alto +ativo │$/)
+  expect(header({ ...SEEDED, effort: 'xhigh' })).toContain('● opus-4-7 · extra alto')
+  expect(header({ ...SEEDED, effort: null })).toMatch(/^│ ● opus-4-7 +ativo │$/)
+  const narrow = cardsToPlain(buildCards({ ...SEEDED, model: 'claude-some-very-long-model-name', width: 34 }), 34)
+  expect(narrow.filter(row => row.length > 0).every(row => row.length === 34)).toBe(true)
+})
+
+test('a main-loop request sets the level; a subagent request does not', async ($, on) => {
+  engine(on, { status: '', numstat: '' })
+  on('turn.step', async function* (_, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] } as never
+  })
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  const step = async (e: object) => {
+    const stream = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-4-7', messageCount: 1, ...e } as never)
+    for await (const _ of stream) void _
+  }
+  await step({ effort: 'max' })
+  expect(await ui.find({ type: 'Text', text: /· máximo/ })).toBeDefined()
+  await step({ effort: 'low', agentId: 'a1' })
+  expect(await ui.find({ type: 'Text', text: /· máximo/ })).toBeDefined()
+  await step({ effort: 'medium' })
+  expect(await ui.find({ type: 'Text', text: /· médio/ })).toBeDefined()
   await ui.unmount()
 })

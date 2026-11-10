@@ -10,7 +10,7 @@ and changed files. Collapse it and a one-line status bar takes its place above t
 
 | Card | Shows |
 |---|---|
-| **Header** | model, running/idle, folder and git branch |
+| **Header** | model with its reasoning level, running/idle, folder and git branch |
 | **LIMITES** (limits) | 5-hour and weekly limits with reset times, and the **context** fill as one coloured bar. *Ver mais* opens the breakdown by category |
 | **MCPs** | each MCP server with its tool count and the context its tool schemas take |
 | **PLUGINS E SKILLS** | enabled plugins and skills, ordered by what you used last |

@@ -22,6 +22,7 @@ const MODEL_POLL_MS = 5_000
 
 const cwd = atom({ plugin: 'session-sidebar', key: 'cwd' } as const, '')
 const model = atom({ plugin: 'session-sidebar', key: 'model' } as const, null)
+const effort = atom({ plugin: 'session-sidebar', key: 'effort' } as const, null)
 const isRunning = atom({ plugin: 'session-sidebar', key: 'isRunning' } as const, false)
 const usage = atom({ plugin: 'session-sidebar', key: 'usage' } as const, null)
 const limits = atom({ plugin: 'session-sidebar', key: 'limits' } as const, [])
@@ -296,6 +297,16 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // Each main-loop request names the reasoning level it is sent with: after
+  // /effort, a model switch or a downgrade, the header follows the next one.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) {
+      const level = e.effort === undefined ? null : String(e.effort)
+      if (level !== (await read($, effort))) await update($, effort, () => level)
+    }
+    return yield* next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) {
       await refreshAgents($)
@@ -404,6 +415,7 @@ export const register: Register = on => {
     const cards = buildCards({
       cwd: await read($, cwd),
       model: await read($, model),
+      effort: await read($, effort),
       isRunning: await read($, isRunning),
       branch: await read($, branch),
       usage: await read($, usage),

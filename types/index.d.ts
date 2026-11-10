@@ -58,6 +58,7 @@ declare module 'claude-code' {
     'session-sidebar': {
       cwd: string
       model: string | null
+      effort: string | null
       isRunning: boolean
       usage: Usage | null
       limits: Limit[]

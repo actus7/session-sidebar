@@ -77,6 +77,20 @@ export function shortModel(name: string): string {
   return name.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 }
 
+// The reasoning level the engine sends, in the pane's language; a level it
+// does not name (a number on an internal build) is shown as given.
+const EFFORT_LABELS: Record<string, string> = {
+  low: 'baixo',
+  medium: 'médio',
+  high: 'alto',
+  xhigh: 'extra alto',
+  max: 'máximo',
+}
+
+export function effortLabel(effort: string): string {
+  return EFFORT_LABELS[effort] ?? effort
+}
+
 export function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? ''
 }

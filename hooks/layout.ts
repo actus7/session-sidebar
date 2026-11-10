@@ -19,6 +19,7 @@ import {
   cap,
   charCount,
   dimLine,
+  effortLabel,
   fit,
   formatTokens,
   NO_VALUE,
@@ -38,6 +39,7 @@ import type { UsageLog } from './usage'
 export type PaneData = {
   cwd: string
   model: string | null
+  effort: string | null
   branch: string | null
   isRunning: boolean
   usage: Usage | null
@@ -92,10 +94,18 @@ function headerRows(data: PaneData, width: number): Line[] {
   const model = data.model === null ? 'modelo indisponível' : `● ${shortModel(data.model)}`
   const status = data.isRunning ? 'ativo' : 'ocioso'
   const folder = baseName(data.cwd) || 'projeto'
+  // The model keeps its room first; the reasoning level fits what is left.
+  const room = width - status.length - 1
+  const modelText = fit(model, room)
+  const effort = data.effort === null || data.model === null ? '' : ` · ${effortLabel(data.effort)}`
+  const effortText = fit(effort, room - charCount(modelText))
   return [
     versionRow(data.version, width),
     {
-      left: [{ text: fit(model, width), tone: 'accent' }],
+      left: [
+        { text: modelText, tone: 'accent' },
+        ...(effortText === '' ? [] : [{ text: effortText, tone: 'strong' as const }]),
+      ],
       right: [{ text: status, tone: data.isRunning ? 'success' : 'dim' }],
     },
     dimLine(fit(`${folder} · ⎇ ${data.branch ?? 'sem git'}`, width), width),
