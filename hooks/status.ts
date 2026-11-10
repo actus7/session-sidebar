@@ -59,3 +59,25 @@ export async function readModel($: EngineInterface): Promise<string | undefined>
     return undefined
   }
 }
+
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+const EFFORT_ROW = /effort/i
+
+export function asEffort(value: unknown): string | undefined {
+  return typeof value === 'string' && EFFORT_LEVELS.includes(value) ? value : undefined
+}
+
+// The level the session is set to, before its first request says what is sent:
+// the /config row when the engine lists one, else CLAUDE_EFFORT. Undefined
+// when neither names a level.
+export async function readConfiguredEffort($: EngineInterface): Promise<string | undefined> {
+  try {
+    const row = (await $.config.list()).find(item => EFFORT_ROW.test(item.key))
+    const fromConfig = asEffort(row?.value)
+    if (fromConfig !== undefined) return fromConfig
+    return asEffort(await $.env.get('CLAUDE_EFFORT'))
+  } catch (error) {
+    $.ui.log(`session-sidebar: effort setting unavailable: ${String(error)}`)
+    return undefined
+  }
+}

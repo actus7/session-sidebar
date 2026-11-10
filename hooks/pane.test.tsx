@@ -122,7 +122,10 @@ const SEEDED: PaneData = {
 }
 
 // Nothing sits beneath the plugin: each hook here stands for the engine.
-function engine(on: On, git: { status: string; numstat: string }, model: () => string = () => 'claude-opus-4-7') {
+function engine(on: On, git: { status: string; numstat: string }, model: () => string = () => 'claude-opus-4-7',
+  seed: Record<string, unknown> = {},
+  config: unknown[] = [],
+) {
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   on('ui.log', () => ({ value: undefined }))
   on('clock.now', () => ({ value: NOW }))
@@ -148,7 +151,8 @@ function engine(on: On, git: { status: string; numstat: string }, model: () => s
   on('fs.read', () => ({ value: 'one\ntwo\n' }))
   on('agent.list', () => ({ value: [{ id: 'a1', type: 'Explore', description: 'Find the auth flow', status: 'running' }] }))
   on('env.get', () => ({ value: undefined }))
-  const stored = new Map<string, unknown>()
+  on('config.list', () => ({ value: config as never }))
+  const stored = new Map<string, unknown>(Object.entries(seed))
   on('store.get', (_, e) => ({ value: stored.get(e.key) }))
   on('store.set', (_, e) => {
     stored.set(e.key, e.value)
@@ -369,5 +373,21 @@ test('a main-loop request sets the level; a subagent request does not', async ($
   expect(await ui.find({ type: 'Text', text: /· máximo/ })).toBeDefined()
   await step({ effort: 'medium' })
   expect(await ui.find({ type: 'Text', text: /· médio/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a new session shows the level before its first request: the setting, else the last one sent', async ($, on) => {
+  engine(on, { status: '', numstat: '' }, undefined, { effort: 'xhigh' })
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /· extra alto/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the effort row of /config wins over the stored level', async ($, on) => {
+  engine(on, { status: '', numstat: '' }, undefined, { effort: 'xhigh' }, [{ key: 'effortLevel', value: 'low' }])
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /· baixo/ })).toBeDefined()
   await ui.unmount()
 })

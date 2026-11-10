@@ -1,6 +1,6 @@
 {
   "name": "session-sidebar",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A collapsible sidebar for Claude Code: rate limits, context usage, MCP servers, plugins and skills, agents, tasks, checks and changed files — plus a status bar when it is collapsed.",
   "author": { "name": "Alex Schmitt" },
   "license": "MIT",

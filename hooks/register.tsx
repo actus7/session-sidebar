@@ -7,7 +7,7 @@ import { readBranch, readChangedFiles } from './git'
 import { buildCards } from './layout'
 import { readExtensions, readPluginAgents } from './plugins'
 import { renderPane } from './pane'
-import { readBreakdown, readModel, readUsage, toUsage } from './status'
+import { asEffort, readBreakdown, readConfiguredEffort, readModel, readUsage, toUsage } from './status'
 import { statusPills } from './view-statusbar'
 import { addChange, readBefore } from './track'
 import { countLines } from './text'
@@ -19,6 +19,9 @@ const CLOCK_MS = 60_000
 // Another plugin may swallow the classic model-switch event, so the model is
 // also polled; the read is local and only a change writes.
 const MODEL_POLL_MS = 5_000
+// The last level a request was sent with, kept across sessions: what a new
+// session shows until its own first request.
+const EFFORT_KEY = 'effort'
 
 const cwd = atom({ plugin: 'session-sidebar', key: 'cwd' } as const, '')
 const model = atom({ plugin: 'session-sidebar', key: 'model' } as const, null)
@@ -59,6 +62,33 @@ async function refreshUsage($: EngineInterface): Promise<void> {
 async function refreshModel($: EngineInterface): Promise<void> {
   const next = await readModel($)
   if (next !== undefined && next !== (await read($, model))) await update($, model, () => next)
+  await refreshConfiguredEffort($)
+}
+
+async function setEffort($: EngineInterface, level: string | null): Promise<void> {
+  if (level !== (await read($, effort))) await update($, effort, () => level)
+}
+
+// A request's own level is the truth; the setting only speaks when it changes
+// (an /effort), so a silent downgrade the request reported is not undone.
+let lastConfiguredEffort: string | undefined
+
+async function refreshConfiguredEffort($: EngineInterface): Promise<void> {
+  const next = await readConfiguredEffort($)
+  if (next === undefined || next === lastConfiguredEffort) return
+  lastConfiguredEffort = next
+  await setEffort($, next)
+}
+
+// Nothing measured yet in this session: the last level any session sent.
+async function seedEffort($: EngineInterface): Promise<void> {
+  if ((await read($, effort)) !== null) return
+  try {
+    const stored = asEffort(await $.store.get(EFFORT_KEY))
+    if (stored !== undefined) await setEffort($, stored)
+  } catch (error) {
+    $.ui.log(`session-sidebar: stored effort unavailable: ${String(error)}`)
+  }
 }
 
 async function refreshCwd($: EngineInterface): Promise<void> {
@@ -207,6 +237,7 @@ export const register: Register = on => {
     })
     await update($, cwd, () => e.cwd)
     await update($, isRunning, () => false)
+    await seedEffort($)
     await Promise.all([refreshSession($), refreshConfigured($), refreshVersion($)])
     clockTimer?.cancel()
     clockTimer = $.clock.every(CLOCK_MS, () => $.ui.invalidate('ui.render'))
@@ -302,7 +333,10 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     if (e.agentId === undefined) {
       const level = e.effort === undefined ? null : String(e.effort)
-      if (level !== (await read($, effort))) await update($, effort, () => level)
+      if (level !== (await read($, effort))) {
+        await setEffort($, level)
+        if (level !== null) await $.store.set(EFFORT_KEY, level)
+      }
     }
     return yield* next(e)
   })
