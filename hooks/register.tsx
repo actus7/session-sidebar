@@ -19,6 +19,9 @@ const CLOCK_MS = 60_000
 // Another plugin may swallow the classic model-switch event, so the model is
 // also polled; the read is local and only a change writes.
 const MODEL_POLL_MS = 5_000
+// The engine seats a pane on each open, and the first one of a session can land
+// inline above the prompt; one close and reopen a moment later seats it again.
+const RESEAT_DELAY_MS = 500
 // The last level a request was sent with, kept across sessions: what a new
 // session shows until its own first request.
 const EFFORT_KEY = 'effort'
@@ -51,6 +54,21 @@ const flip = (list: string[], id: string) => (list.includes(id) ? list.filter(it
 // The clock redraws the pane each minute so the reset countdowns stay current.
 let clockTimer: { cancel: () => void } | undefined
 let modelTimer: { cancel: () => void } | undefined
+
+let isReseatTried = false
+
+// Once per session, and only while the pane is drawn inline: a plugin close is
+// not the person's, so `isOpen` stays true. A failure leaves the pane as it is.
+async function reseatPane($: EngineInterface): Promise<void> {
+  try {
+    await $.clock.sleep(RESEAT_DELAY_MS)
+    if (!(await read($, isOpen))) return
+    await $.ui.close({ id: PANE })
+    await $.ui.open({ id: PANE, title: PANE_TITLE })
+  } catch (error) {
+    $.ui.log(`session-sidebar: pane not reseated: ${String(error)}`)
+  }
+}
 
 async function refreshUsage($: EngineInterface): Promise<void> {
   const next = await readUsage($)
@@ -237,6 +255,7 @@ export const register: Register = on => {
     })
     await update($, cwd, () => e.cwd)
     await update($, isRunning, () => false)
+    isReseatTried = false
     await seedEffort($)
     await Promise.all([refreshSession($), refreshConfigured($), refreshVersion($)])
     clockTimer?.cancel()
@@ -469,6 +488,11 @@ export const register: Register = on => {
       now: await $.clock.now(),
       width: e.props.bodyColumns,
     })
+
+    if (e.props.placement === 'inline' && !isReseatTried) {
+      isReseatTried = true
+      void reseatPane($)
+    }
 
     const els = $.ui.resolve(e)
     const { Box, Button } = els
