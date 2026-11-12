@@ -76,6 +76,10 @@ declare module 'claude-code' {
       turnBase: { tokens: number | null; usd: number | null } | null
       version: string | null
       extensions: Extensions
+      autoResume: boolean
+      resumeQuota: number
+      resumePlan: number | null
+      isConfirmingReset: boolean
     }
   }
 }

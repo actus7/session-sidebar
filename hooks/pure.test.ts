@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { parseFrontmatter } from './frontmatter'
 import { formatReset, limitTone } from './limits'
+import { asFlag, asQuota, isLimitFull, RESUME_QUOTA, resumeAt } from './resume'
 import { mergeChanged, parseNumstatZ, parsePorcelainZ, sortByDirectory } from './git'
 import { fit, middleElide, toPlain, type Line } from './text'
 import { agentRows, definitionRows } from './view-agents'
@@ -168,4 +169,32 @@ test('usage log: a use bumps the count and the time; the order is most recent, t
   expect(log.skills['ecc:plan']).toEqual({ count: 1, last: 10 })
   const entries = { b: { count: 1, last: 5 }, c: { count: 9, last: 5 }, d: { count: 1, last: 50 } }
   expect(byRecentUse(['a', 'b', 'c', 'd'], name => name, entries)).toEqual(['d', 'c', 'b', 'a'])
+})
+
+test('resume: the latest reset of the full windows, plus a margin; none full, the earliest ahead', () => {
+  const at = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString()
+  const margin = 30_000
+  const full = [
+    { kind: 'five_hour', percentUsed: 100, resetsAt: at(90) },
+    { kind: 'seven_day', percentUsed: 40, resetsAt: at(3000) },
+  ]
+  expect(resumeAt(full, NOW)).toBe(NOW + 90 * 60_000 + margin)
+  const lagging = [
+    { kind: 'five_hour', percentUsed: 98, resetsAt: at(20) },
+    { kind: 'seven_day', percentUsed: 60, resetsAt: at(3000) },
+  ]
+  expect(resumeAt(lagging, NOW)).toBe(NOW + 20 * 60_000 + margin)
+  expect(resumeAt([{ kind: 'five_hour', percentUsed: 100, resetsAt: at(-5) }], NOW)).toBeUndefined()
+  expect(resumeAt([{ kind: 'five_hour', percentUsed: 100 }], NOW)).toBeUndefined()
+})
+
+test('resume settings: a bad stored quota falls back to the full one; the flag is on only when true', () => {
+  expect(asQuota(1)).toBe(1)
+  expect(asQuota(0)).toBe(0)
+  expect(asQuota(-1)).toBe(RESUME_QUOTA)
+  expect(asQuota('2')).toBe(RESUME_QUOTA)
+  expect(asFlag(true)).toBe(true)
+  expect(asFlag('true')).toBe(false)
+  expect(isLimitFull([{ kind: 'five_hour', percentUsed: 100 }])).toBe(true)
+  expect(isLimitFull([{ kind: 'five_hour', percentUsed: 99.9 }])).toBe(false)
 })

@@ -24,12 +24,14 @@ function textProps(part: Part) {
 // Draws the cards from buildCards: each one a round-bordered box with padding
 // and a margin below, its rows a left group and an optional right group. A card
 // with an id draws its title row's left side as a Button that calls `onToggle`.
+// `extras` are drawn right under the title row of the card with that id.
 export function renderPane(
   els: Elements,
   cards: Card[],
   width: number,
   onToggle: (id: string) => void,
   onMore: (id: string) => void,
+  extras: Record<string, JSX.Element> = {},
 ) {
   const { Box, Text, Button } = els
   const part = (value: Part, index: number) => (
@@ -65,7 +67,9 @@ export function renderPane(
           paddingX={1}
           marginBottom={1}
         >
-          {card.rows.map((line, rowIndex) => row(line, rowIndex, card.id))}
+          {card.rows.slice(0, 1).map((line, rowIndex) => row(line, rowIndex, card.id))}
+          {card.id !== undefined && extras[card.id]}
+          {card.rows.slice(1).map((line, rowIndex) => row(line, rowIndex + 1, card.id))}
         </Box>
       ))}
     </Box>

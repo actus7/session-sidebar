@@ -7,6 +7,8 @@ import { readBranch, readChangedFiles } from './git'
 import { buildCards } from './layout'
 import { readExtensions, readPluginAgents } from './plugins'
 import { renderPane } from './pane'
+import { asFlag, asQuota, AUTO_RESUME_KEY, isLimitFull, RESUME_QUOTA, RESUME_QUOTA_KEY, RESUME_TEXT, resumeAt } from './resume'
+import { renderResume } from './view-resume'
 import { asEffort, readBreakdown, readConfiguredEffort, readModel, readUsage, toUsage } from './status'
 import { statusPills } from './view-statusbar'
 import { addChange, readBefore } from './track'
@@ -46,6 +48,10 @@ const isOpen = atom({ plugin: 'session-sidebar', key: 'isOpen' } as const, true)
 const collapsed = atom({ plugin: 'session-sidebar', key: 'collapsed' } as const, [])
 const expanded = atom({ plugin: 'session-sidebar', key: 'expanded' } as const, [])
 const turnBase = atom({ plugin: 'session-sidebar', key: 'turnBase' } as const, null)
+const autoResume = atom({ plugin: 'session-sidebar', key: 'autoResume' } as const, false)
+const resumeQuota = atom({ plugin: 'session-sidebar', key: 'resumeQuota' } as const, RESUME_QUOTA)
+const resumePlan = atom({ plugin: 'session-sidebar', key: 'resumePlan' } as const, null)
+const isConfirmingReset = atom({ plugin: 'session-sidebar', key: 'isConfirmingReset' } as const, false)
 const LABEL_BACKGROUND = '#2d333b'
 const LABEL_COLOR = '#e6edf3'
 
@@ -68,6 +74,61 @@ async function reseatPane($: EngineInterface): Promise<void> {
   } catch (error) {
     $.ui.log(`session-sidebar: pane not reseated: ${String(error)}`)
   }
+}
+
+// The toggle and the quota live in $.store, so they hold across sessions; the
+// atoms mirror them for the drawing.
+async function seedResume($: EngineInterface): Promise<void> {
+  try {
+    const [isOn, quota] = await Promise.all([$.store.get(AUTO_RESUME_KEY), $.store.get(RESUME_QUOTA_KEY)])
+    await update($, autoResume, () => asFlag(isOn))
+    await update($, resumeQuota, () => asQuota(quota))
+  } catch (error) {
+    $.ui.log(`session-sidebar: resume settings unavailable: ${String(error)}`)
+  }
+}
+
+async function setAutoResume($: EngineInterface, isOn: boolean): Promise<void> {
+  await update($, autoResume, () => isOn)
+  await $.store.set(AUTO_RESUME_KEY, isOn)
+  if (!isOn) await cancelResume($)
+}
+
+async function setQuota($: EngineInterface, quota: number): Promise<void> {
+  await update($, resumeQuota, () => quota)
+  await $.store.set(RESUME_QUOTA_KEY, quota)
+}
+
+// One pending resume per session: the timer fires once, a little past the reset.
+let resumeTimer: { cancel: () => void } | undefined
+
+async function cancelResume($: EngineInterface): Promise<void> {
+  resumeTimer?.cancel()
+  resumeTimer = undefined
+  if ((await read($, resumePlan)) !== null) await update($, resumePlan, () => null)
+}
+
+async function scheduleResume($: EngineInterface): Promise<void> {
+  if (resumeTimer !== undefined || !(await read($, autoResume)) || (await read($, resumeQuota)) <= 0) return
+  const now = await $.clock.now()
+  const at = resumeAt((await read($, limits)) ?? [], now)
+  if (at === undefined) {
+    $.ui.log('session-sidebar: rate limited, but no reset time to resume at')
+    return
+  }
+  await update($, resumePlan, () => at)
+  resumeTimer = $.clock.after(at - now, () => void resume($))
+}
+
+// Checked again at fire time: the toggle or the quota may have moved meanwhile.
+async function resume($: EngineInterface): Promise<void> {
+  resumeTimer = undefined
+  await update($, resumePlan, () => null)
+  const quota = await read($, resumeQuota)
+  if (!(await read($, autoResume)) || quota <= 0) return
+  await setQuota($, quota - 1)
+  // A plugin's prompt runs once the session is idle; not awaited, so the timer ends now.
+  $.prompt.submit({ text: RESUME_TEXT }).catch(error => $.ui.log(`session-sidebar: resume not sent: ${String(error)}`))
 }
 
 async function refreshUsage($: EngineInterface): Promise<void> {
@@ -257,6 +318,8 @@ export const register: Register = on => {
     await update($, isRunning, () => false)
     isReseatTried = false
     await seedEffort($)
+    await cancelResume($)
+    await seedResume($)
     await Promise.all([refreshSession($), refreshConfigured($), refreshVersion($)])
     clockTimer?.cancel()
     clockTimer = $.clock.every(CLOCK_MS, () => $.ui.invalidate('ui.render'))
@@ -331,6 +394,8 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     await recordUsage($, useOfPrompt(e.text, await knownSkill($)))
+    // The person carried on by hand: the pending resume is theirs to drop.
+    if (e.origin?.kind === 'composer') await cancelResume($)
 
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -369,8 +434,21 @@ export const register: Register = on => {
     // The classic compact, cwd and settings events can be swallowed by another
     // plugin, so each main turn re-reads what they would have moved.
     await Promise.all([refreshSession($), refreshConfigured($)])
+    // The StopFailure event can be swallowed by another plugin, so an error
+    // turn with a full window counts as a rate-limit stop too.
+    if (e.reason === 'error' && isLimitFull((await read($, limits)) ?? [])) await scheduleResume($)
 
     return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('classic.StopFailure', async ($, e, next) => {
+    const ran = await next(e)
+    if (e.error === 'rate_limit') {
+      await refreshUsage($)
+      await scheduleResume($)
+    }
+
+    return ran
   }).catch(($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
@@ -501,6 +579,24 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
     }
 
+    const resumeBox = renderResume(
+      els,
+      {
+        isOn: await read($, autoResume),
+        quota: await read($, resumeQuota),
+        plannedAt: await read($, resumePlan),
+        isConfirming: await read($, isConfirmingReset),
+      },
+      {
+        onToggle: () => void read($, autoResume).then(isOn => setAutoResume($, !isOn)),
+        onReset: () => void update($, isConfirmingReset, () => true),
+        onConfirm: () => void setQuota($, RESUME_QUOTA).then(() => update($, isConfirmingReset, () => false)),
+        onCancel: () => void update($, isConfirmingReset, () => false),
+      },
+    )
+
+    // A collapsed LIMITES card keeps only its title row, the options too.
+    const isLimitsShut = ((await read($, collapsed)) ?? []).includes('limits')
     const toggle = (id: string) => void update($, collapsed, list => flip(list, id))
     const more = (id: string) => void update($, expanded, list => flip(list, id))
 
@@ -511,7 +607,7 @@ export const register: Register = on => {
             {'▶ Recolher'}
           </Button>
         </Box>
-        {renderPane(els, cards, e.props.bodyColumns, toggle, more)}
+        {renderPane(els, cards, e.props.bodyColumns, toggle, more, isLimitsShut ? {} : { limits: resumeBox })}
       </Box>
     )
   })

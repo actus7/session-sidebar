@@ -59,6 +59,9 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 - Keeps, per session, only what it draws. Across sessions it stores a small count of which skills and
   plugins you used, to sort them.
 - Makes **no network requests** and writes no files.
+- Only with **Retomar ao resetar** on (it starts off): after a turn stops on a rate limit, sends
+  `continue` to the session a little past the window's reset, at most as many times as the resets
+  left (2; **Redefinir** refills them). A prompt you type meanwhile cancels the pending one.
 
 ## Develop
 

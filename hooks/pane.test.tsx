@@ -391,3 +391,39 @@ test('the effort row of /config wins over the stored level', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /· baixo/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('auto-resume: on, a rate-limit stop sends "continue" after the reset and spends one reset; Redefinir refills', async ($, on) => {
+  engine(on, { status: '', numstat: '' }, undefined, {}, [])
+  const waits: number[] = []
+  const sent: string[] = []
+  on('clock.after', (_, e) => {
+    waits.push(e.ms)
+    return { value: undefined }
+  })
+  on('prompt.submit', (_, e) => {
+    sent.push(e.text)
+    return { text: e.text }
+  })
+  on('classic.StopFailure', () => ({}))
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /\[ \] Retomar ao resetar/ }))?.text).toBeDefined()
+
+  await ui.press({ key: 'resume-toggle' })
+  expect((await ui.find({ type: 'Text', text: /\[x\] Retomar/ }))?.text).toBeDefined()
+  await $.classic.StopFailure({ error: 'rate_limit' } as never)
+
+  // The full five-hour window resets in 134 minutes; the resume waits 30 s past it.
+  expect(waits).toEqual([134 * 60_000 + 30_000])
+  // The timer's work settles over a few engine calls; wait for its last write.
+  for (let tries = 0; tries < 100 && (await ui.find({ type: 'Text', text: /Resets disponíveis: 1/ })) === undefined; tries += 1) {
+    await $.session.cwd()
+  }
+  expect(sent).toEqual(['continue'])
+  expect((await ui.find({ type: 'Text', text: /Resets disponíveis: 1/ }))?.text).toBeDefined()
+
+  await ui.press({ key: 'resume-reset' })
+  await ui.press({ key: 'resume-confirm' })
+  expect((await ui.find({ type: 'Text', text: /Resets disponíveis: 2/ }))?.text).toBeDefined()
+  await ui.unmount()
+})
