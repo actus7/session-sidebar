@@ -33,7 +33,7 @@ import { contextBar, contextDetailRows } from './view-context'
 import { fileRows } from './view-files'
 import { agentRows, definitionRows, isActive } from './view-agents'
 import { extensionRows, totalSkills } from './view-extensions'
-import { mcpRows } from './view-mcps'
+import { mcpList, mcpRows } from './view-mcps'
 import type { UsageLog } from './usage'
 
 export type PaneData = {
@@ -56,6 +56,8 @@ export type PaneData = {
   usageLog: UsageLog
   collapsed: string[]
   expanded: string[]
+  mcpOff: string[]
+  selectedRow: string | null
   now: number
   width: number
 }
@@ -175,13 +177,13 @@ function limitsCard(data: PaneData, width: number, isMore: boolean): Card {
 
 function extensionsCard(data: PaneData, width: number, isMore: boolean): Card {
   const skills = `${totalSkills(data.extensions)} skills`
-  const full = `${data.extensions.plugins.length} plugins · ${skills}`
+  const full = `${data.extensions.plugins.filter(plugin => !plugin.isOff).length} plugins · ${skills}`
   // Title, its ▾ mark and a gap come first; the plugin count goes when it would cut the title.
   const count = charCount('▾ PLUGINS E SKILLS') + 1 + charCount(full) <= width ? full : skills
   return {
     rows: [
       titleRow('PLUGINS E SKILLS', count, width),
-      ...extensionRows(data.extensions, data.usageLog, data.now, width, isMore),
+      ...extensionRows(data.extensions, data.usageLog, data.now, width, isMore, data.selectedRow),
     ],
   }
 }
@@ -215,8 +217,9 @@ function filesCard(data: PaneData, width: number, isMore: boolean): Card {
 
 function mcpsCard(data: PaneData, width: number, isMore: boolean): Card {
   const mcps = data.breakdown?.mcps ?? null
-  const count = mcps === null || mcps.length === 0 ? '' : `${mcps.length} ${mcps.length === 1 ? 'servidor' : 'servidores'}`
-  return { rows: [titleRow('MCPs', count, width), ...mcpRows(mcps, width, isMore)] }
+  const list = mcpList(mcps, data.mcpOff) ?? []
+  const count = list.length === 0 ? '' : `${list.length} ${list.length === 1 ? 'servidor' : 'servidores'}`
+  return { rows: [titleRow('MCPs', count, width), ...mcpRows(mcps, width, isMore, data.mcpOff, data.selectedRow)] }
 }
 
 // A card whose full list is longer than its short one ends with "Ver mais" (short

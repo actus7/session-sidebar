@@ -4,7 +4,8 @@
 export type Tone = 'plain' | 'dim' | 'title' | 'strong' | 'accent' | 'warning' | 'error' | 'success'
 export type Part = { text: string; tone: Tone; color?: string }
 // A `toggle` line is a card's "Ver mais" / "Ver menos" button, drawn as one.
-export type Line = { left: Part[]; right?: Part[]; toggle?: 'more' | 'less' }
+// A `press` line is a button whose key goes to the pane's `onPress`.
+export type Line = { left: Part[]; right?: Part[]; toggle?: 'more' | 'less'; press?: string }
 
 // A list's row cap: lifted while its card is expanded to "Ver mais".
 export function cap(max: number, isMore: boolean): number {

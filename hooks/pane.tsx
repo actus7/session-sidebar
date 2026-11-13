@@ -32,6 +32,7 @@ export function renderPane(
   onToggle: (id: string) => void,
   onMore: (id: string) => void,
   extras: Record<string, JSX.Element> = {},
+  onPress: (key: string) => void = () => undefined,
 ) {
   const { Box, Text, Button } = els
   const part = (value: Part, index: number) => (
@@ -43,6 +44,10 @@ export function renderPane(
     <Box key={String(index)} flexDirection="row" justifyContent="space-between">
       {id !== undefined && index === 0 ? (
         <Button key={`toggle-${id}`} plain onPress={() => onToggle(id)}>
+          {line.left.map(part)}
+        </Button>
+      ) : line.press !== undefined ? (
+        <Button key={`press-${line.press}`} plain onPress={() => onPress(line.press ?? '')}>
           {line.left.map(part)}
         </Button>
       ) : id !== undefined && line.toggle !== undefined ? (

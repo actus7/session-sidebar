@@ -5,6 +5,7 @@ import { readAgents, fileReaderOf, readScopedDefinitions } from './agents'
 import { applyCheck, classifyCommand } from './checks'
 import { readBranch, readChangedFiles } from './git'
 import { buildCards } from './layout'
+import { asNames, isOffServer, MCP_OFF_KEY, offServerOfTool, switchServer } from './mcp-switch'
 import { readExtensions, readPluginAgents } from './plugins'
 import { renderPane } from './pane'
 import { asFlag, asQuota, AUTO_RESUME_KEY, isLimitFull, RESUME_QUOTA, RESUME_QUOTA_KEY, RESUME_TEXT, resumeAt } from './resume'
@@ -52,6 +53,10 @@ const autoResume = atom({ plugin: 'session-sidebar', key: 'autoResume' } as cons
 const resumeQuota = atom({ plugin: 'session-sidebar', key: 'resumeQuota' } as const, RESUME_QUOTA)
 const resumePlan = atom({ plugin: 'session-sidebar', key: 'resumePlan' } as const, null)
 const isConfirmingReset = atom({ plugin: 'session-sidebar', key: 'isConfirmingReset' } as const, false)
+const mcpOff = atom({ plugin: 'session-sidebar', key: 'mcpOff' } as const, [])
+const selectedRow = atom({ plugin: 'session-sidebar', key: 'selectedRow' } as const, null)
+// Plugins turned off in this session: still loaded until the next one, so their calls are refused.
+const pluginsOffNow = atom({ plugin: 'session-sidebar', key: 'pluginsOffNow' } as const, [])
 const LABEL_BACKGROUND = '#2d333b'
 const LABEL_COLOR = '#e6edf3'
 
@@ -97,6 +102,63 @@ async function setAutoResume($: EngineInterface, isOn: boolean): Promise<void> {
 async function setQuota($: EngineInterface, quota: number): Promise<void> {
   await update($, resumeQuota, () => quota)
   await $.store.set(RESUME_QUOTA_KEY, quota)
+}
+
+// The switched-off servers live in $.store; the atom mirrors them for the
+// drawing and for the per-call check.
+async function readMcpOff($: EngineInterface): Promise<string[]> {
+  try {
+    return asNames(await $.store.get(MCP_OFF_KEY))
+  } catch (error) {
+    $.ui.log(`session-sidebar: switched-off MCPs unavailable: ${String(error)}`)
+    return []
+  }
+}
+
+// Off: its calls are refused now, and the next session holds it back. On: it
+// leaves the list and, if this session held it back, connects at once.
+async function switchMcp($: EngineInterface, server: string, isOff: boolean): Promise<void> {
+  const next = switchServer(await readMcpOff($), server, isOff)
+  await $.store.set(MCP_OFF_KEY, next)
+  await update($, mcpOff, () => next)
+  await update($, selectedRow, () => null)
+  if (isOff) return
+  const joined = await $.mcp.connect(server)
+  if (!joined.isConnected) $.ui.log(`session-sidebar: ${server} not connected: ${joined.message}`)
+  await refreshBreakdown($)
+}
+
+// The official CLI writes the setting, as /plugin would; the engine loads the
+// change from the next session.
+const PLUGIN_CLI_TIMEOUT_MS = 30_000
+
+async function switchPlugin($: EngineInterface, name: string, isOff: boolean): Promise<void> {
+  await update($, selectedRow, () => null)
+  const key = ((await read($, extensions))?.plugins ?? []).find(plugin => plugin.name === name)?.key
+  if (key === undefined) return
+  try {
+    const ran = await $.process.run(['claude', 'plugin', isOff ? 'disable' : 'enable', key], {
+      timeoutMs: PLUGIN_CLI_TIMEOUT_MS,
+    })
+    if (ran.exitCode !== 0) {
+      $.ui.log(`session-sidebar: plugin ${key} not switched: ${ran.stderr.trim() || ran.stdout.trim()}`)
+      return
+    }
+  } catch (error) {
+    $.ui.log(`session-sidebar: plugin ${key} not switched: ${String(error)}`)
+    return
+  }
+  await update($, pluginsOffNow, list => switchServer(list ?? [], name, isOff))
+  await refreshExtensions($)
+}
+
+// A row's press key is `<list>:<name>` to open its switch, `<list>-off:` / `<list>-on:` to flip it.
+async function pressRow($: EngineInterface, key: string): Promise<void> {
+  const [action, ...rest] = key.split(':')
+  const name = rest.join(':')
+  if (action === 'mcp' || action === 'plugin') await update($, selectedRow, current => (current === key ? null : key))
+  else if (action === 'mcp-off' || action === 'mcp-on') await switchMcp($, name, action === 'mcp-off')
+  else if (action === 'plugin-off' || action === 'plugin-on') await switchPlugin($, name, action === 'plugin-off')
 }
 
 // One pending resume per session: the timer fires once, a little past the reset.
@@ -190,14 +252,23 @@ async function refreshAgents($: EngineInterface): Promise<void> {
   if (rows !== undefined) await update($, agents, () => rows)
 }
 
+// The folder the engine reads its settings, plugins, skills and agents from:
+// CLAUDE_CONFIG_DIR when set (a profile manager's), else ~/.claude.
+async function readConfigDir($: EngineInterface): Promise<string | undefined> {
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  if (configured) return configured
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  return home ? `${home}/.claude` : undefined
+}
+
 async function refreshDefs($: EngineInterface): Promise<void> {
   const folder = await read($, cwd)
-  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  const configDir = await readConfigDir($)
   const reader = fileReaderOf($)
-  const scoped = await readScopedDefinitions(reader, home, folder)
+  const scoped = await readScopedDefinitions(reader, configDir, folder)
   let plugins = (await read($, defs)).plugins ?? []
   try {
-    plugins = home ? await readPluginAgents(reader, home) : []
+    plugins = configDir ? await readPluginAgents(reader, configDir) : []
   } catch (error) {
     // A malformed installed list keeps the last plugin groups on screen.
     $.ui.log(`session-sidebar: plugin agents unavailable: ${String(error)}`)
@@ -217,10 +288,10 @@ async function refreshVersion($: EngineInterface): Promise<void> {
 }
 
 async function refreshExtensions($: EngineInterface): Promise<void> {
-  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
-  if (!home) return
+  const configDir = await readConfigDir($)
+  if (!configDir) return
   try {
-    const next = await readExtensions(fileReaderOf($), home)
+    const next = await readExtensions(fileReaderOf($), configDir)
     await update($, extensions, () => next)
   } catch (error) {
     // A malformed settings or installed list keeps the last list on screen.
@@ -250,7 +321,7 @@ async function readUsageLog($: EngineInterface) {
 // A slash command is a skill when it is one of the user's or names an enabled plugin.
 async function knownSkill($: EngineInterface): Promise<(name: string) => boolean> {
   const current = await read($, extensions)
-  const plugins = new Set((current?.plugins ?? []).map(plugin => plugin.name))
+  const plugins = new Set((current?.plugins ?? []).filter(plugin => !plugin.isOff).map(plugin => plugin.name))
   const user = new Set(current?.userSkills ?? [])
   return name => user.has(name) || plugins.has(name.split(':')[0] ?? '')
 }
@@ -320,6 +391,8 @@ export const register: Register = on => {
     await seedEffort($)
     await cancelResume($)
     await seedResume($)
+    const off = await readMcpOff($)
+    await update($, mcpOff, () => off)
     await Promise.all([refreshSession($), refreshConfigured($), refreshVersion($)])
     clockTimer?.cancel()
     clockTimer = $.clock.every(CLOCK_MS, () => $.ui.invalidate('ui.render'))
@@ -470,10 +543,27 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The engine's own join of a switched-off server is held back: /mcp lists it
+  // as held by this plugin, and [Ligar] (our own connect) lets it through.
+  on('mcp.connect', async ($, e, next) => {
+    if (next.origin.plugin !== 'engine' || !isOffServer(await readMcpOff($), e.server)) return next(e)
+    return { value: { isConnected: false, reason: 'disabled', message: `${e.server} desligado na sidebar` } as const }
+  }).catch(($, e, next) => next(e))
+
   // Any tool: a skill, a plugin's subagent or a plugin's MCP tool counts as a use.
+  // A server switched off mid-session keeps its tools until the next one: its calls are refused.
   on('tool.call', async ($, e, next) => {
+    const off = e.tool.startsWith('mcp__') ? offServerOfTool((await read($, mcpOff)) ?? [], e.tool) : undefined
+    if (off !== undefined) {
+      return { deny: `O servidor MCP "${off}" foi desligado na sidebar da sessão. Não use as ferramentas dele.` }
+    }
+    const use = useOfToolCall(e.tool, e as unknown as Record<string, unknown>)
+    const plugin = use?.plugin
+    if (plugin !== undefined && ((await read($, pluginsOffNow)) ?? []).includes(plugin)) {
+      return { deny: `O plugin "${plugin}" foi desligado na sidebar da sessão. Não use as skills, agentes ou ferramentas dele.` }
+    }
     const ran = await next(e)
-    if (succeeded(ran)) await recordUsage($, useOfToolCall(e.tool, e as unknown as Record<string, unknown>))
+    if (succeeded(ran)) await recordUsage($, use)
 
     return ran
   }).catch(($, e, next) => next(e))
@@ -563,6 +653,8 @@ export const register: Register = on => {
       usageLog: await readUsageLog($),
       collapsed: (await read($, collapsed)) ?? [],
       expanded: (await read($, expanded)) ?? [],
+      mcpOff: (await read($, mcpOff)) ?? [],
+      selectedRow: await read($, selectedRow),
       now: await $.clock.now(),
       width: e.props.bodyColumns,
     })
@@ -607,7 +699,7 @@ export const register: Register = on => {
             {'▶ Recolher'}
           </Button>
         </Box>
-        {renderPane(els, cards, e.props.bodyColumns, toggle, more, isLimitsShut ? {} : { limits: resumeBox })}
+        {renderPane(els, cards, e.props.bodyColumns, toggle, more, isLimitsShut ? {} : { limits: resumeBox }, key => void pressRow($, key))}
       </Box>
     )
   })

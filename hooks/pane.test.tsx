@@ -117,6 +117,8 @@ const SEEDED: PaneData = {
   },
   collapsed: [],
   expanded: [],
+  mcpOff: [],
+  selectedRow: null,
   now: NOW,
   width: WIDTH,
 }
@@ -425,5 +427,29 @@ test('auto-resume: on, a rate-limit stop sends "continue" after the reset and sp
   await ui.press({ key: 'resume-reset' })
   await ui.press({ key: 'resume-confirm' })
   expect((await ui.find({ type: 'Text', text: /Resets disponíveis: 2/ }))?.text).toBeDefined()
+  await ui.unmount()
+})
+
+test('a pressed MCP server opens [Desligar]: its calls are refused, and [Ligar] connects it again', async ($, on) => {
+  engine(on, { status: '', numstat: '' })
+  const connected: string[] = []
+  on('mcp.connect', (_, e) => {
+    connected.push(e.server)
+    return { value: { isConnected: true, server: e.server } }
+  })
+  await $.session.start({ cwd: '/w/app', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  await ui.press({ key: 'press-mcp:srv0' })
+  expect(await ui.find({ type: 'Text', text: /\[Desligar\]/ })).toBeDefined()
+  await ui.press({ key: 'press-mcp-off:srv0' })
+  expect(await ui.find({ type: 'Text', text: /○ srv0/ })).toBeDefined()
+  const ran = await $.tool.call({ tool: 'mcp__srv0__tool' } as never)
+  expect(String((ran as { deny?: unknown }).deny)).toContain('srv0')
+
+  await ui.press({ key: 'press-mcp:srv0' })
+  await ui.press({ key: 'press-mcp-on:srv0' })
+  expect(connected).toEqual(['srv0'])
+  expect(await ui.find({ type: 'Text', text: /● srv0/ })).toBeDefined()
   await ui.unmount()
 })

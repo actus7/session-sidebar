@@ -12,8 +12,8 @@ and changed files. Collapse it and a one-line status bar takes its place above t
 |---|---|
 | **Header** | model with its reasoning level, running/idle, folder and git branch |
 | **LIMITES** (limits) | 5-hour and weekly limits with reset times, and the **context** fill as one coloured bar. *Ver mais* opens the breakdown by category |
-| **MCPs** | each MCP server with its tool count and the context its tool schemas take |
-| **PLUGINS E SKILLS** | enabled plugins and skills, ordered by what you used last |
+| **MCPs** | each MCP server with its tool count and the context its tool schemas take; click one to switch it off (its calls are refused at once, the next session holds it back) or back on |
+| **PLUGINS E SKILLS** | enabled plugins and skills, ordered by what you used last, then the disabled plugins; click one to disable or enable it (through `claude plugin`, from the next session) |
 | **AGENTES** | running and finished subagents, and the agent definitions you have configured |
 | **TAREFAS** | the todo list with progress |
 | **VERIFICAÇÕES** | the last test, type-check, lint and build runs (detected from Bash commands) |

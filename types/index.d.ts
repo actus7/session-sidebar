@@ -47,7 +47,8 @@ export type Breakdown = {
 }
 
 // Enabled plugins with how many skills each ships, and the user's own skills.
-export type PluginInfo = { name: string; skills: number }
+// `key` is name@marketplace; `isOff` an installed plugin the settings disable.
+export type PluginInfo = { name: string; skills: number; key?: string; isOff?: boolean }
 export type Extensions = { plugins: PluginInfo[]; userSkills: string[] }
 
 export type CheckKind = 'testes' | 'type-check' | 'lint' | 'build'
@@ -80,6 +81,9 @@ declare module 'claude-code' {
       resumeQuota: number
       resumePlan: number | null
       isConfirmingReset: boolean
+      mcpOff: string[]
+      selectedRow: string | null
+      pluginsOffNow: string[]
     }
   }
 }

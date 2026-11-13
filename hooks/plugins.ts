@@ -4,11 +4,11 @@
 import type { Extensions, PluginAgents } from '../types'
 import { readDefinitions, type FileReader } from './agents'
 
-const INSTALLED_FILE = '/.claude/plugins/installed_plugins.json'
-const SETTINGS_FILE = '/.claude/settings.json'
+const INSTALLED_FILE = '/plugins/installed_plugins.json'
+const SETTINGS_FILE = '/settings.json'
 const AGENTS_DIR = 'agents'
 const SKILLS_DIR = 'skills'
-const USER_SKILLS_DIR = '/.claude/skills'
+const USER_SKILLS_DIR = '/skills'
 const MAX_PLUGINS = 40
 
 type InstalledEntry = { installPath?: unknown }
@@ -33,6 +33,13 @@ export function parseEnabled(text: string): Set<string> {
   return new Set(Object.keys(enabled).filter(key => enabled[key] === true))
 }
 
+// The installed plugins the settings turn off (`false`): listed so they can be turned back on.
+export function parseDisabled(text: string): Set<string> {
+  const parsed: unknown = JSON.parse(text)
+  const enabled = (parsed as { enabledPlugins?: Record<string, unknown> }).enabledPlugins ?? {}
+  return new Set(Object.keys(enabled).filter(key => enabled[key] === false))
+}
+
 function pluginName(key: string): string {
   return key.split('@')[0] ?? key
 }
@@ -47,9 +54,9 @@ async function readOrEmpty(reader: FileReader, path: string): Promise<string | u
 }
 
 // Installed and enabled plugins that ship agents, sorted by plugin name.
-export async function readPluginAgents(reader: FileReader, home: string): Promise<PluginAgents[]> {
-  const installedText = await readOrEmpty(reader, `${home}${INSTALLED_FILE}`)
-  const settingsText = await readOrEmpty(reader, `${home}${SETTINGS_FILE}`)
+export async function readPluginAgents(reader: FileReader, configDir: string): Promise<PluginAgents[]> {
+  const installedText = await readOrEmpty(reader, `${configDir}${INSTALLED_FILE}`)
+  const settingsText = await readOrEmpty(reader, `${configDir}${SETTINGS_FILE}`)
   if (installedText === undefined || settingsText === undefined) return []
 
   const installed = parseInstalled(installedText)
@@ -81,10 +88,10 @@ async function skillNames(reader: FileReader, dir: string): Promise<string[]> {
 }
 
 // Installed and enabled plugins with their skill counts, and the user's skills.
-export async function readExtensions(reader: FileReader, home: string): Promise<Extensions> {
-  const userSkills = await skillNames(reader, `${home}${USER_SKILLS_DIR}`)
-  const installedText = await readOrEmpty(reader, `${home}${INSTALLED_FILE}`)
-  const settingsText = await readOrEmpty(reader, `${home}${SETTINGS_FILE}`)
+export async function readExtensions(reader: FileReader, configDir: string): Promise<Extensions> {
+  const userSkills = await skillNames(reader, `${configDir}${USER_SKILLS_DIR}`)
+  const installedText = await readOrEmpty(reader, `${configDir}${INSTALLED_FILE}`)
+  const settingsText = await readOrEmpty(reader, `${configDir}${SETTINGS_FILE}`)
   if (installedText === undefined || settingsText === undefined) return { plugins: [], userSkills }
 
   const installed = parseInstalled(installedText)
@@ -92,8 +99,14 @@ export async function readExtensions(reader: FileReader, home: string): Promise<
   const plugins = await Promise.all(
     keys.map(async key => ({
       name: pluginName(key),
+      key,
       skills: (await skillNames(reader, `${installed.get(key) ?? ''}/${SKILLS_DIR}`)).length,
     })),
   )
-  return { plugins: plugins.sort((left, right) => left.name.localeCompare(right.name)), userSkills }
+  const off = [...parseDisabled(settingsText)]
+    .filter(key => installed.has(key))
+    .slice(0, MAX_PLUGINS)
+    .map(key => ({ name: pluginName(key), key, skills: 0, isOff: true }))
+  const byName = (left: { name: string }, right: { name: string }) => left.name.localeCompare(right.name)
+  return { plugins: [...plugins.sort(byName), ...off.sort(byName)], userSkills }
 }

@@ -4,9 +4,12 @@ import { parseFrontmatter } from './frontmatter'
 import { formatReset, limitTone } from './limits'
 import { asFlag, asQuota, isLimitFull, RESUME_QUOTA, resumeAt } from './resume'
 import { mergeChanged, parseNumstatZ, parsePorcelainZ, sortByDirectory } from './git'
+import { isOffServer, offServerOfTool, switchServer, wireName } from './mcp-switch'
+import { mcpRows } from './view-mcps'
 import { fit, middleElide, toPlain, type Line } from './text'
 import { agentRows, definitionRows } from './view-agents'
-import { wrapNames } from './view-extensions'
+import { extensionRows, wrapNames } from './view-extensions'
+import { parseDisabled } from './plugins'
 import { byRecentUse, EMPTY_LOG, recordUse, useOfPrompt, useOfToolCall } from './usage'
 
 const NOW = Date.parse('2026-10-30T10:00:00Z')
@@ -197,4 +200,41 @@ test('resume settings: a bad stored quota falls back to the full one; the flag i
   expect(asFlag('true')).toBe(false)
   expect(isLimitFull([{ kind: 'five_hour', percentUsed: 100 }])).toBe(true)
   expect(isLimitFull([{ kind: 'five_hour', percentUsed: 99.9 }])).toBe(false)
+})
+
+test('mcp switch: names match in either spelling, a call finds its server, a switch adds or drops it', () => {
+  expect(wireName('claude.ai Gmail')).toBe('claude_ai_Gmail')
+  expect(wireName('plugin:context7:context7')).toBe('plugin_context7_context7')
+  expect(isOffServer(['claude.ai Gmail'], 'claude_ai_Gmail')).toBe(true)
+  expect(offServerOfTool(['claude.ai Gmail'], 'mcp__claude_ai_Gmail__create_draft')).toBe('claude.ai Gmail')
+  expect(offServerOfTool(['srv'], 'mcp__srv2__tool')).toBeUndefined()
+  expect(switchServer(['a'], 'b', true)).toEqual(['a', 'b'])
+  expect(switchServer(['a', 'b'], 'a', false)).toEqual(['b'])
+})
+
+test('mcp rows: a held-back server still lists as off, and the selected one shows its action', () => {
+  const rows = mcpRows([{ name: 'Neon', tools: 3, tokens: 900 }], 40, false, ['graft'], 'mcp:graft')
+  const plain = toPlain(rows, 40)
+  expect(plain.some(row => row.includes('● Neon'))).toBe(true)
+  expect(plain.some(row => row.includes('○ graft') && row.includes('desligado'))).toBe(true)
+  expect(plain.some(row => row.includes('[Ligar]'))).toBe(true)
+  expect(mcpRows(null, 40, false, ['graft']).length).toBe(1)
+})
+
+test('plugins: a disabled one lists after the enabled, a pressed one opens its switch, the sidebar has none', () => {
+  expect([...parseDisabled('{"enabledPlugins":{"a@m":true,"b@m":false}}')]).toEqual(['b@m'])
+  const extensions = {
+    plugins: [
+      { name: 'session-sidebar', key: 'session-sidebar@m', skills: 0 },
+      { name: 'ecc', key: 'ecc@m', skills: 3 },
+      { name: 'vercel', key: 'vercel@m', skills: 0, isOff: true },
+    ],
+    userSkills: [],
+  }
+  const rows = extensionRows(extensions, EMPTY_LOG, NOW, 40, false, 'plugin:vercel')
+  const plain = toPlain(rows, 40)
+  expect(plain.findIndex(row => row.includes('○ vercel'))).toBeGreaterThan(plain.findIndex(row => row.includes('ecc')))
+  expect(plain.some(row => row.includes('[Ligar]'))).toBe(true)
+  expect(rows.find(row => row.press === 'plugin:ecc')).toBeDefined()
+  expect(rows.find(row => row.press === 'plugin:session-sidebar')).toBeUndefined()
 })

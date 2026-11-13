@@ -75,10 +75,10 @@ async function readDefinition(reader: FileReader, path: string, fileName: string
 // The user's and the project's definitions. Each folder is read on its own.
 export async function readScopedDefinitions(
   reader: FileReader,
-  home: string | undefined,
+  configDir: string | undefined,
   cwd: string,
 ): Promise<{ user: AgentDef[]; project: AgentDef[] }> {
-  const user = home ? await readDefinitions(reader, `${home}/${DEFINITIONS_DIR}`) : []
+  const user = configDir ? await readDefinitions(reader, `${configDir}/agents`) : []
   const project = cwd ? await readDefinitions(reader, `${cwd}/${DEFINITIONS_DIR}`) : []
   return { user, project }
 }

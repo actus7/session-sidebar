@@ -166,13 +166,13 @@ test('plugin agents: only installed and enabled plugins, read from their agents 
       ],
     },
   )
-  const groups = await readPluginAgents(reader, home)
+  const groups = await readPluginAgents(reader, `${home}/.claude`)
   expect(groups.map(group => group.plugin)).toEqual(['ecc'])
   expect(groups[0]?.agents).toEqual([{ name: 'planner', model: 'claude-opus-4-7', description: 'Plans work' }])
 })
 
 test('plugin agents: no installed list means no plugin groups, not an error', async () => {
-  expect(await readPluginAgents(fakeReader({}, {}), 'C:/Users/dev')).toEqual([])
+  expect(await readPluginAgents(fakeReader({}, {}), 'C:/Users/dev/.claude')).toEqual([])
 })
 
 test('definitions: a missing folder is empty, and a file without frontmatter takes its file name', async () => {
