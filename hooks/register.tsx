@@ -46,6 +46,9 @@ const checks = atom({ plugin: 'session-sidebar', key: 'checks' } as const, [])
 const version = atom({ plugin: 'session-sidebar', key: 'version' } as const, null)
 const extensions = atom({ plugin: 'session-sidebar', key: 'extensions' } as const, { plugins: [], userSkills: [] })
 const isOpen = atom({ plugin: 'session-sidebar', key: 'isOpen' } as const, true)
+// Open but undrawn: the engine holds an unasked pane back on a narrow terminal;
+// the collapsed band stands in for it until a surface draws it.
+const isUnplaced = atom({ plugin: 'session-sidebar', key: 'isUnplaced' } as const, false)
 const collapsed = atom({ plugin: 'session-sidebar', key: 'collapsed' } as const, [])
 const expanded = atom({ plugin: 'session-sidebar', key: 'expanded' } as const, [])
 const turnBase = atom({ plugin: 'session-sidebar', key: 'turnBase' } as const, null)
@@ -68,6 +71,12 @@ let modelTimer: { cancel: () => void } | undefined
 
 let isReseatTried = false
 
+// Opens the pane and records whether a surface draws it now.
+async function openPane($: EngineInterface): Promise<void> {
+  const opened = await $.ui.open({ id: PANE, title: PANE_TITLE })
+  await update($, isUnplaced, () => !opened.isPlaced)
+}
+
 // Once per session, and only while the pane is drawn inline: a plugin close is
 // not the person's, so `isOpen` stays true. A failure leaves the pane as it is.
 async function reseatPane($: EngineInterface): Promise<void> {
@@ -75,7 +84,7 @@ async function reseatPane($: EngineInterface): Promise<void> {
     await $.clock.sleep(RESEAT_DELAY_MS)
     if (!(await read($, isOpen))) return
     await $.ui.close({ id: PANE })
-    await $.ui.open({ id: PANE, title: PANE_TITLE })
+    await openPane($)
   } catch (error) {
     $.ui.log(`session-sidebar: pane not reseated: ${String(error)}`)
   }
@@ -398,7 +407,7 @@ export const register: Register = on => {
     clockTimer = $.clock.every(CLOCK_MS, () => $.ui.invalidate('ui.render'))
     modelTimer?.cancel()
     modelTimer = $.clock.every(MODEL_POLL_MS, () => void refreshModel($))
-    if (await read($, isOpen)) void $.ui.open({ id: PANE, title: PANE_TITLE })
+    if (await read($, isOpen)) void openPane($).catch(error => $.ui.log(`session-sidebar: pane not opened: ${String(error)}`))
 
     return next(e)
   })
@@ -452,7 +461,7 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
       return { text: 'Sidebar oculta.' }
     }
-    await $.ui.open({ id: PANE, title: PANE_TITLE })
+    await openPane($)
 
     return { text: 'Sidebar visível.' }
   })
@@ -633,6 +642,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    // Drawn now (the terminal widened, or the person opened it): the band steps aside.
+    if (await read($, isUnplaced)) await update($, isUnplaced, () => false)
     const cards = buildCards({
       cwd: await read($, cwd),
       model: await read($, model),
@@ -706,13 +717,13 @@ export const register: Register = on => {
 
   // With the pane collapsed, a one-line band above the prompt brings it back.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (await read($, isOpen)) return next(e)
+    if ((await read($, isOpen)) && !(await read($, isUnplaced))) return next(e)
     // Other mods share this slot: draw theirs below ours instead of replacing it.
     const below = await next(e).catch(() => undefined)
     const { Box, Button, Text } = $.ui.resolve(e)
     const expand = async () => {
       await update($, isOpen, () => true)
-      await $.ui.open({ id: PANE, title: PANE_TITLE })
+      await openPane($)
     }
     // The figures the sidebar showed, as pills on the left; the button stays on the right.
     const pills = statusPills(await read($, usage), (await read($, limits)) ?? [], await read($, turnBase))

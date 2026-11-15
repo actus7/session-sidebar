@@ -72,6 +72,7 @@ declare module 'claude-code' {
       defs: AgentDefs
       checks: Check[]
       isOpen: boolean
+      isUnplaced: boolean
       collapsed: string[]
       expanded: string[]
       turnBase: { tokens: number | null; usd: number | null } | null
